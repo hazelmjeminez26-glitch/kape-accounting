@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 type PaymentMethod = "Cash" | "GCash" | "Card";
 
@@ -39,6 +41,8 @@ function txTime(t: Transaction) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +71,15 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  useEffect(() => { loadTransactions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => setCurrentUser(user));
+    loadTransactions();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
 
   const totalSales = transactions
     .filter((t) => t.type === "sale")
@@ -93,6 +105,7 @@ export default function DashboardPage() {
         amount: quantity * pricePerItem,
         quantity,
         payment_method: paymentMethod,
+        user_id: currentUser!.id,
       })
       .select()
       .single();
@@ -115,6 +128,7 @@ export default function DashboardPage() {
         amount,
         category,
         supplier: supplier.trim() || null,
+        user_id: currentUser!.id,
       })
       .select()
       .single();
@@ -132,7 +146,15 @@ export default function DashboardPage() {
             <span className="text-2xl">☕</span>
             <span className="text-xl font-bold text-gray-900 tracking-tight">Kape</span>
           </div>
-          <span className="text-sm text-gray-500">{today}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500 hidden sm:block">{today}</span>
+            <button
+              onClick={handleLogout}
+              className="text-xs font-medium text-gray-500 hover:text-gray-800 border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 transition-colors"
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </header>
 
