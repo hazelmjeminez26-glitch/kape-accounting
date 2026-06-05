@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { User } from "@supabase/supabase-js";
+import { toInventoryAmount } from "@/lib/units";
 
 /* ── Types ── */
 
@@ -25,11 +26,33 @@ type CartItem = {
   quantity: number;
 };
 
+// Shape returned by the recipes + inventory join.
+type RecipeRow = {
+  menu_item_id: string;
+  inventory_id: string;
+  amount: number;
+  amount_unit: string;
+  inventory: {
+    id: string;
+    item_name: string;
+    current_stock: number;
+    unit: string;
+    low_stock_threshold: number;
+  } | null;
+};
+
+// A post-order notice (no recipe, low stock, negative stock, deduction failure).
+type Notice = {
+  level: "error" | "warning" | "info";
+  message: string;
+};
+
 type Receipt = {
   items: CartItem[];
   total: number;
   paymentMethod: PaymentMethod;
   time: string;
+  notices: Notice[];
 };
 
 /* ── Constants ── */
@@ -54,6 +77,11 @@ function fmtPrice(price: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+// Format a stock value with its unit, stripping trailing decimal zeros.
+function fmtStock(n: number, unit: string) {
+  return `${parseFloat(n.toFixed(3))} ${unit}`;
 }
 
 /* ── Main Page ── */
@@ -123,33 +151,130 @@ export default function POSPage() {
     setCart(prev => prev.filter(c => c.menuItemId !== menuItemId));
   }
 
-  /* ── Complete order ── */
+  /* ── Complete order with automatic inventory deduction ── */
 
   async function handleCompleteOrder() {
     if (cart.length === 0 || !currentUser) return;
     setSubmitting(true);
 
+    // ── Step 1: Record the sales first — never blocked, never skipped ──
+    // If this fails we abort early. If deductions later fail the sale is still
+    // saved (visible in Inventory notice) so no data is silently lost.
     const inserts = cart.map(item => ({
-      user_id:       currentUser.id,
-      type:          "sale",
-      item_name:     item.name,
-      amount:        item.price * item.quantity,
-      quantity:      item.quantity,
+      user_id:        currentUser.id,
+      type:           "sale",
+      item_name:      item.name,
+      amount:         item.price * item.quantity,
+      quantity:       item.quantity,
       payment_method: paymentMethod,
-      menu_item_id:  item.menuItemId, // used by Stage 4 for inventory deduction
+      menu_item_id:   item.menuItemId,
     }));
 
-    const { error: err } = await supabase.from("transactions").insert(inserts);
-
-    if (err) {
+    const { error: txnErr } = await supabase.from("transactions").insert(inserts);
+    if (txnErr) {
       alert("Hindi nai-save ang order. Subukan ulit.");
       setSubmitting(false);
       return;
     }
 
+    // ── Step 2: Fetch recipes + live inventory stock in one query ──
+    const menuItemIds = [...new Set(cart.map(i => i.menuItemId))];
+    const { data: recipeRows } = await supabase
+      .from("recipes")
+      .select("menu_item_id, inventory_id, amount, amount_unit, inventory(id, item_name, current_stock, unit, low_stock_threshold)")
+      .in("menu_item_id", menuItemIds);
+
+    const notices: Notice[] = [];
+
+    // Group recipes by menu_item_id for easy lookup.
+    const recipeMap: Record<string, RecipeRow[]> = {};
+    for (const r of recipeRows ?? []) {
+      (recipeMap[r.menu_item_id] ??= []).push(r as unknown as RecipeRow);
+    }
+
+    // ── Step 3: Flag items that have no recipe set ──
+    for (const item of cart) {
+      if (!(recipeMap[item.menuItemId]?.length)) {
+        notices.push({
+          level: "info",
+          message: `No recipe for "${item.name}" — inventory not deducted. Add one in Menu → Recipe.`,
+        });
+      }
+    }
+
+    // ── Step 4: Aggregate deductions per inventory item ──
+    // Multiple cart items can use the same ingredient, so we sum them first
+    // before issuing updates to avoid race conditions from parallel writes.
+    const deductMap = new Map<string, {
+      deduction: number;
+      itemName: string;
+      currentStock: number;
+      unit: string;
+      threshold: number;
+    }>();
+
+    for (const cartItem of cart) {
+      for (const recipe of recipeMap[cartItem.menuItemId] ?? []) {
+        const inv = recipe.inventory;
+        if (!inv) continue;
+        const deductPerUnit = toInventoryAmount(Number(recipe.amount), recipe.amount_unit, inv.unit);
+        const totalDeduct   = deductPerUnit * cartItem.quantity;
+        if (!deductMap.has(recipe.inventory_id)) {
+          deductMap.set(recipe.inventory_id, {
+            deduction:    0,
+            itemName:     inv.item_name,
+            currentStock: Number(inv.current_stock),
+            unit:         inv.unit,
+            threshold:    Number(inv.low_stock_threshold),
+          });
+        }
+        deductMap.get(recipe.inventory_id)!.deduction += totalDeduct;
+      }
+    }
+
+    // ── Step 5: Apply all deductions concurrently ──
+    // Promise.allSettled ensures all updates are attempted even if one fails.
+    // Failures become notices so Maria can adjust stock manually.
+    const results = await Promise.allSettled(
+      Array.from(deductMap.entries()).map(async ([invId, d]) => {
+        const newStock = d.currentStock - d.deduction;
+        const { error } = await supabase
+          .from("inventory")
+          .update({ current_stock: newStock })
+          .eq("id", invId);
+        if (error) throw new Error(d.itemName);
+        return { itemName: d.itemName, newStock, unit: d.unit, threshold: d.threshold };
+      })
+    );
+
+    // ── Step 6: Build notices from deduction results ──
+    for (const result of results) {
+      if (result.status === "rejected") {
+        const name = (result.reason as Error)?.message ?? "Unknown item";
+        notices.push({
+          level: "error",
+          message: `Could not update stock for "${name}" — adjust manually in Inventory.`,
+        });
+        continue;
+      }
+      const { itemName, newStock, unit, threshold } = result.value;
+      if (newStock < 0) {
+        notices.push({
+          level: "error",
+          message: `${itemName} went negative (now ${fmtStock(newStock, unit)}) — restock needed.`,
+        });
+      } else if (threshold > 0 && newStock <= threshold) {
+        notices.push({
+          level: "warning",
+          message: `${itemName} is below its threshold (now ${fmtStock(newStock, unit)}).`,
+        });
+      }
+    }
+
+    // ── Step 7: Show receipt with any notices ──
     const total = cart.reduce((s, i) => s + i.price * i.quantity, 0);
     const time  = new Date().toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
-    setReceipt({ items: [...cart], total, paymentMethod, time });
+    setReceipt({ items: [...cart], total, paymentMethod, time, notices });
     setCart([]);
     setSubmitting(false);
   }
@@ -413,6 +538,29 @@ export default function POSPage() {
                 <span>{fmtPrice(receipt.total)}</span>
               </div>
             </div>
+
+            {/* Notices: no recipe, low stock, negative stock, deduction failures */}
+            {receipt.notices.length > 0 && (
+              <div className="mb-5 space-y-2 text-left">
+                {receipt.notices.map((notice, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium border ${
+                      notice.level === "error"
+                        ? "bg-red-50 text-red-700 border-red-200"
+                        : notice.level === "warning"
+                        ? "bg-amber-50 text-amber-700 border-amber-200"
+                        : "bg-blue-50 text-blue-700 border-blue-200"
+                    }`}
+                  >
+                    <span className="shrink-0 mt-0.5">
+                      {notice.level === "info" ? "ℹ️" : "⚠️"}
+                    </span>
+                    <span>{notice.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <button
               onClick={() => setReceipt(null)}
