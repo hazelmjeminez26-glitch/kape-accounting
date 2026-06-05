@@ -221,7 +221,8 @@ export default function DashboardPage() {
               badge={lowStockCount > 0 ? lowStockCount : undefined}
               onClick={() => router.push("/inventory")}
             />
-            <QuickActionButton icon="☕" label="Menu / POS" onClick={() => router.push("/menu")} />
+            <QuickActionButton icon="☕" label="Menu" onClick={() => router.push("/menu")} />
+            <QuickActionButton icon="🛒" label="New Order" onClick={() => router.push("/pos")} />
           </div>
         </div>
 
@@ -274,6 +275,7 @@ export default function DashboardPage() {
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 z-10">
         <div className="max-w-2xl mx-auto px-4 flex justify-around py-2">
           <NavItem icon="🏠" label="Home"      active />
+          <NavItem icon="🛒" label="Orders"    onClick={() => router.push("/pos")} />
           <NavItem icon="☕" label="Menu"      onClick={() => router.push("/menu")} />
           <NavItem icon="📦" label="Inventory" onClick={() => router.push("/inventory")} />
           <NavItem icon="📊" label="Reports"   onClick={() => router.push("/reports")} />
