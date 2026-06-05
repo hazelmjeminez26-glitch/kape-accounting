@@ -48,6 +48,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [showAddSale, setShowAddSale] = useState(false);
   const [showAddExpense, setShowAddExpense] = useState(false);
+  const [lowStockCount, setLowStockCount] = useState(0);
 
   const today = new Date().toLocaleDateString("en-PH", {
     weekday: "long",
@@ -74,6 +75,17 @@ export default function DashboardPage() {
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setCurrentUser(user));
     loadTransactions();
+    // Fetch inventory to surface low-stock count on the dashboard.
+    supabase
+      .from("inventory")
+      .select("current_stock, low_stock_threshold")
+      .then(({ data }) => {
+        if (!data) return;
+        const count = data.filter(
+          i => Number(i.low_stock_threshold) > 0 && Number(i.current_stock) <= Number(i.low_stock_threshold)
+        ).length;
+        setLowStockCount(count);
+      });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleLogout() {
@@ -182,6 +194,20 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {/* Low-stock alert */}
+        {lowStockCount > 0 && (
+          <button
+            onClick={() => router.push("/inventory")}
+            className="w-full text-left bg-red-50 border border-red-200 rounded-2xl px-4 py-3 flex items-center gap-3 hover:bg-red-100 transition-colors"
+          >
+            <span className="text-lg shrink-0">⚠️</span>
+            <p className="text-sm font-medium text-red-700 flex-1">
+              {lowStockCount} inventory item{lowStockCount > 1 ? "s are" : " is"} running low on stock
+            </p>
+            <span className="text-xs text-red-500 font-medium shrink-0">View →</span>
+          </button>
+        )}
+
         {/* Quick Actions */}
         <div>
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Quick Actions</h2>
@@ -189,7 +215,12 @@ export default function DashboardPage() {
             <QuickActionButton icon="➕" label="Add Sale" onClick={() => setShowAddSale(true)} />
             <QuickActionButton icon="📝" label="Add Expense" onClick={() => setShowAddExpense(true)} />
             <QuickActionButton icon="📊" label="View Reports" onClick={() => router.push("/reports")} />
-            <QuickActionButton icon="📋" label="Transaction History" />
+            <QuickActionButton
+              icon="📦"
+              label="Inventory"
+              badge={lowStockCount > 0 ? lowStockCount : undefined}
+              onClick={() => router.push("/inventory")}
+            />
           </div>
         </div>
 
@@ -609,12 +640,21 @@ function SummaryCard({
   );
 }
 
-function QuickActionButton({ icon, label, onClick }: { icon: string; label: string; onClick?: () => void }) {
+function QuickActionButton({
+  icon, label, onClick, badge,
+}: {
+  icon: string; label: string; onClick?: () => void; badge?: number;
+}) {
   return (
     <button onClick={onClick}
-      className="flex items-center gap-3 bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 active:bg-gray-100 transition-colors text-left w-full">
+      className="flex items-center gap-3 bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 active:bg-gray-100 transition-colors text-left w-full relative">
       <span className="text-lg">{icon}</span>
       {label}
+      {badge !== undefined && badge > 0 && (
+        <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
