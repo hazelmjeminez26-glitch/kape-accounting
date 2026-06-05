@@ -1,6 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+
+// RGB equivalents of CATEGORY_COLORS for use inside jsPDF (which takes r,g,b).
+const CATEGORY_RGB: Record<string, [number, number, number]> = {
+  Ingredients: [249, 115,  22],
+  Rent:        [168,  85, 247],
+  Salaries:    [ 99, 102, 241],
+  Utilities:   [  6, 182, 212],
+  Equipment:   [245, 158,  11],
+  Other:       [107, 114, 128],
+};
 import { useRouter } from "next/navigation";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -249,38 +259,27 @@ export default function ReportsPage() {
   const hasExpenses = catData.length > 0;
   const period      = fmtMonth(year, month);
 
-  /* PDF download */
+  /* PDF download — programmatic jsPDF (no html2canvas needed) */
   async function handleDownloadPDF() {
-    if (!reportRef.current) return;
     setDownloading(true);
     try {
-      // Dynamic imports keep these heavy libs out of the initial bundle.
-      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
-        import("jspdf"),
-        import("html2canvas"),
-      ]);
+      // Dynamic import keeps jsPDF out of the initial bundle.
+      const { jsPDF } = await import("jspdf");
 
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 1.5,
-        useCORS: true,
-        backgroundColor: "#f9fafb",
-        logging: false,
-      });
-
-      const imgData = canvas.toDataURL("image/png");
-      const pdf     = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-      const pageW   = pdf.internal.pageSize.getWidth();
-      const pageH   = pdf.internal.pageSize.getHeight();
-      const margin  = 8;
+      const pdf      = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageW    = pdf.internal.pageSize.getWidth();
+      const pageH    = pdf.internal.pageSize.getHeight();
+      const margin   = 14;
+      const right    = pageW - margin;
       const contentW = pageW - margin * 2;
-      const headerH  = 36;
+      let y          = 0;
 
-      // Branded header block
+      // ── Branded header ───────────────────────────────────────────
       pdf.setFillColor(37, 99, 235);
       pdf.rect(0, 0, pageW, 22, "F");
       pdf.setTextColor(255, 255, 255);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(13);
+      pdf.setFontSize(14);
       pdf.text("Kape — Monthly Financial Report", margin, 14);
 
       // Subtitle bar
@@ -290,29 +289,121 @@ export default function ReportsPage() {
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(9);
       pdf.text(period, margin, 31);
-      pdf.text(
-        `Generated: ${now.toLocaleDateString("en-PH")}`,
-        pageW - margin, 31,
-        { align: "right" }
-      );
+      pdf.text(`Generated: ${now.toLocaleDateString("en-PH")}`, right, 31, { align: "right" });
 
-      // Report content — multi-page safe
-      const imgH       = (canvas.height * contentW) / canvas.width;
-      let heightLeft   = imgH;
+      y = 46;
 
-      pdf.addImage(imgData, "PNG", margin, headerH, contentW, imgH);
-      heightLeft -= pageH - headerH;
+      // ── Section: Summary ─────────────────────────────────────────
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(9);
+      pdf.setTextColor(107, 114, 128);
+      pdf.text("SUMMARY", margin, y);
+      y += 4;
+      pdf.setDrawColor(229, 231, 235);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, y, right, y);
+      y += 7;
 
-      while (heightLeft > 0) {
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", margin, heightLeft - imgH, contentW, imgH);
-        heightLeft -= pageH;
+      const summaryRows: [string, number, [number, number, number]][] = [
+        ["Total Revenue",  totalRevenue,  [22, 163, 74]],
+        ["Total Expenses", totalExpenses, [220, 38, 38]],
+        ["Net Profit",     netProfit,     [37, 99, 235]],
+      ];
+
+      summaryRows.forEach(([label, amount, [r, g, b]]) => {
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(11);
+        pdf.setTextColor(55, 65, 81);
+        pdf.text(label, margin, y);
+
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(r, g, b);
+        pdf.text(`PHP ${amount.toLocaleString("en-PH")}`, right, y, { align: "right" });
+        y += 10;
+      });
+
+      y += 2;
+      pdf.setDrawColor(229, 231, 235);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, y, right, y);
+      y += 10;
+
+      // ── Section: Expense breakdown ───────────────────────────────
+      if (catData.length > 0) {
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9);
+        pdf.setTextColor(107, 114, 128);
+        pdf.text("EXPENSE BREAKDOWN BY CATEGORY", margin, y);
+        y += 4;
+        pdf.setDrawColor(229, 231, 235);
+        pdf.setLineWidth(0.3);
+        pdf.line(margin, y, right, y);
+        y += 7;
+
+        catData.forEach((cat, idx) => {
+          // Zebra row
+          if (idx % 2 === 0) {
+            pdf.setFillColor(249, 250, 251);
+            pdf.rect(margin, y - 4, contentW, 10, "F");
+          }
+
+          const [r, g, b] = CATEGORY_RGB[cat.name] ?? [107, 114, 128];
+
+          // Colour dot
+          pdf.setFillColor(r, g, b);
+          pdf.circle(margin + 3, y + 1, 1.5, "F");
+
+          // Name
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(10);
+          pdf.setTextColor(55, 65, 81);
+          pdf.text(cat.name, margin + 9, y + 2);
+
+          // Amount
+          pdf.setFont("helvetica", "bold");
+          pdf.setTextColor(r, g, b);
+          pdf.text(
+            `PHP ${cat.value.toLocaleString("en-PH")}`,
+            right - 18, y + 2,
+            { align: "right" }
+          );
+
+          // Percentage
+          pdf.setFont("helvetica", "normal");
+          pdf.setTextColor(156, 163, 175);
+          pdf.text(`${cat.pct.toFixed(1)}%`, right, y + 2, { align: "right" });
+
+          // Mini progress bar
+          const barMaxW = 40;
+          const barW    = Math.max((barMaxW * cat.pct) / 100, 1);
+          pdf.setFillColor(229, 231, 235);
+          pdf.rect(margin + 60, y, barMaxW, 2, "F");
+          pdf.setFillColor(r, g, b);
+          pdf.rect(margin + 60, y, barW, 2, "F");
+
+          y += 10;
+        });
+
+        y += 4;
       }
 
+      // ── Footer ───────────────────────────────────────────────────
+      const footerY = pageH - 10;
+      pdf.setDrawColor(229, 231, 235);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, footerY - 4, right, footerY - 4);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      pdf.setTextColor(156, 163, 175);
+      pdf.text("Generated by Kape Accounting", margin, footerY);
+      pdf.text(period, right, footerY, { align: "right" });
+
       pdf.save(`kape-report-${year}-${String(month).padStart(2, "0")}.pdf`);
+
     } catch (err) {
       console.error("PDF error:", err);
-      alert("Hindi ma-generate ang PDF. Subukan ulit.");
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Hindi ma-generate ang PDF: ${msg}`);
     } finally {
       setDownloading(false);
     }
