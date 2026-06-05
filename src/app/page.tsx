@@ -188,7 +188,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-2 gap-3">
             <QuickActionButton icon="➕" label="Add Sale" onClick={() => setShowAddSale(true)} />
             <QuickActionButton icon="📝" label="Add Expense" onClick={() => setShowAddExpense(true)} />
-            <QuickActionButton icon="📊" label="View Reports" />
+            <QuickActionButton icon="📊" label="View Reports" onClick={() => router.push("/reports")} />
             <QuickActionButton icon="📋" label="Transaction History" />
           </div>
         </div>
