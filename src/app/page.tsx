@@ -221,6 +221,7 @@ export default function DashboardPage() {
               badge={lowStockCount > 0 ? lowStockCount : undefined}
               onClick={() => router.push("/inventory")}
             />
+            <QuickActionButton icon="☕" label="Menu / POS" onClick={() => router.push("/menu")} />
           </div>
         </div>
 
@@ -272,10 +273,10 @@ export default function DashboardPage() {
       {/* Bottom nav */}
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 z-10">
         <div className="max-w-2xl mx-auto px-4 flex justify-around py-2">
-          <NavItem icon="🏠" label="Home" active />
-          <NavItem icon="💳" label="Sales" />
-          <NavItem icon="🧾" label="Expenses" />
-          <NavItem icon="📊" label="Reports" />
+          <NavItem icon="🏠" label="Home"      active />
+          <NavItem icon="☕" label="Menu"      onClick={() => router.push("/menu")} />
+          <NavItem icon="📦" label="Inventory" onClick={() => router.push("/inventory")} />
+          <NavItem icon="📊" label="Reports"   onClick={() => router.push("/reports")} />
         </div>
       </nav>
 
@@ -703,9 +704,9 @@ function TransactionRow({
   );
 }
 
-function NavItem({ icon, label, active = false }: { icon: string; label: string; active?: boolean }) {
+function NavItem({ icon, label, active = false, onClick }: { icon: string; label: string; active?: boolean; onClick?: () => void }) {
   return (
-    <button className={`flex flex-col items-center gap-0.5 px-4 py-1 text-xs font-medium transition-colors ${active ? "text-blue-600" : "text-gray-400 hover:text-gray-600"}`}>
+    <button onClick={onClick} className={`flex flex-col items-center gap-0.5 px-4 py-1 text-xs font-medium transition-colors ${active ? "text-blue-600" : "text-gray-400 hover:text-gray-600"}`}>
       <span className="text-xl">{icon}</span>
       {label}
     </button>
